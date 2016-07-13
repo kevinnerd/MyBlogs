@@ -1,0 +1,379 @@
+# 引言 #
+
+Java的标准**I/O**(输入/输出)机制可能已经被大多数Java开发者所熟悉，这是一种面向比特流的传输数据的方式，即将所有的IO都视为字节的移动，通过一个叫Stream的对象，来完成系统与外界之间的数据交互，因此这种数据传输方式通常也叫做IO流。
+
+**面向流的I/O**系统一次一个字节地处理数据。一个输入流产生一个字节的数据，一个输出流消费一个字节的数据。这种传输方式的优点在于数据传输与处理都相对简单，缺点就是当某个线程在处理输入或输出操作的时候，必须阻塞，等待I/O操作完成，这样就会降低系统效率。
+
+因此为了解决标准I/O的传输效率问题，Java在JDK1.4引入了新的I/O机制——NIO，对于这个缩写有两种理解：New I/O或Non-blocking I/O，个人认为后者更能体现NIO的特点，即非阻塞式I/O，这是一种面向块的，高速的数据传输方式。
+
+**面向块的I/O**系统一次处理一个数据块，虽然牺牲了流式传输的操作简单性，但却大大提高了传输效率。
+
+值得注意的是，在引入了NIO之后，JDK将原有的I/O包和NIO进行了集成，java.io.* 已经在NIO的基础上重新实现了，所以在标注I/O系统中，也可以非常使用NIO的高效传输方式。
+
+----------
+## 通道和缓冲区 ##
+**通道**和**缓冲区**是NIO中的两个核心概念，几乎所有使用NIO进行传输的系统中，都会涉及到这两个对象。其中通道其实是对标准I/O中流的模拟，而缓冲区就是用来存储数据的区域，值得注意的是，无论是从通道中读取数据，还是写入数据，都需要通过缓冲区来完成，即从通道中读取数据到缓冲区(或将缓冲区中的数据写入通道)。
+
+### 什么是缓冲区 ###
+Buffer是一个对象，该对象用于存储从通道中读取的数据或即将写入到通道中的数据。NIO中引入Buffer对象也是它区别于标准I/O系统的重要原因，在原有的I/O系统中，可以直接从流中获取或写入数据，但在NIO中，所有数据都存储在Buffer对象中，并通过Buffer对象操作数据。
+
+在读取数据时，是读到缓冲区对象中；在写入数据时，也是写到缓冲区对象中，任何时候访问NIO中的数据，都是在和Buffer对象打交道。
+
+缓冲区实质上是一个数组，多数时候可以理解为一个字节数组，但是它也不仅仅是一个数组，缓冲区对象主要提供了对数据的结构化访问，还提供了追踪读写进程的方法。
+
+### 缓冲区类型 ###
+最常用的缓冲区类型是ByteBuffer。顾名思义，ByteBuffer底层维护了一个字节数组，并提供了对该字节数据进行读取的get/set操作。
+
+而实际上，NIO为Java中每一种基础数据类型都提供了对应的Buffer类，如下：
+
+- ByteBuffer
+- CharBuffer
+- ShortBuffer
+- IntBuffer
+- LongBuffer
+- FloatBuffer
+- DoubleBuffer 
+
+每一个特定类型的Buffer类都是Buffer接口的一个特定实现，除了ByteBuffer，每一个Buffer类都有完全一样的操作，只是他们所处理的数据类型不同。因为大多数标准 I/O 操作都使用 ByteBuffer，所以它具有所有共享的缓冲区操作以及一些特有的操作。
+
+下面是一段代码示例：
+
+	import java.nio.*;
+
+	public class UseFloatBuffer
+	{
+	  static public void main( String args[] ) throws Exception {
+	    FloatBuffer buffer = FloatBuffer.allocate( 10 );
+	
+	    for (int i=0; i<buffer.capacity(); ++i) {
+	      float f = (float)Math.sin( (((float)i)/10)*(2*Math.PI) );
+	      buffer.put( f );
+	    }
+	
+	    buffer.flip();
+	
+	    while (buffer.hasRemaining()) {
+	      float f = buffer.get();
+	      System.out.println( f );
+	    }
+	  }
+	}
+
+### 什么是通道？ ###
+Channel是一个对象，负责数据的读取和写入。拿NIO和标准I/O做一个比较，通道就像是流。
+
+正如前面所强调的，你永远无法从通道中直接读取或写入数据，所有数据都交由Buffer对象来处理。
+
+### 通道类型 ###
+通道与流的不同就在于，通道是双向的，而流是单向的(所有的输入流都是InputStream的子类，所有输出流都是OutputStream的子类)，通道可以用于读，写，或读和写。
+
+因为通道是双向的，所以能够更好的反映底层操作系统数据传输的真实情况，就像Unix系统中的底层通道也是双向的。
+
+## 从理论到实践：NIO中的读和写 ##
+### 概述 ###
+读和写是I/O中的基本概念，NIO也是如此，在NIO中读和写都是通过Channel对象和Buffer对象来组合完成的，当需要读取数据时：首先创建一个缓冲区对象，然后从通道中将数据读入缓冲区；当需要写入数据时，同样创建一个缓冲区对象，然后通过缓冲区对象将要写入的数据传递到通道。
+
+接下来的几个小节中，会通过几段简单代码，来演示NIO的读取和写入操作，并详细讲解缓冲区的内部原理。
+
+### 从文件中读取数据 ###
+下面这个练习，演示如何使用NIO从文件中读取数据，如果用标准I/O的方式读取文件中的数据，我们需要先获取文件的输入流对象：FileInputStream，然后从流对象中读取数据到程序中进行处理。但是在NIO中，读取方式有些区别，因为NIO中数据都是从Channel读取到Buffer中，所以我们应该先从文件流中获取Channel对象，然后创建Buffer对象，最后从通道中读取数据到缓冲区。
+
+因此，从文件中读取数据就分为下面三个步骤：
+
+1. 从FileInputStream中获取Channel对象
+2. 创建Buffer对象
+3. 从Channel对象中读取数据到Buffer对象
+
+下面我们来看具体步骤的代码。
+
+### 三个简单的步骤 ###
+首先我们从FileInputStream中获取Channel对象，获取方式如下
+
+	FileInputStream fin = new FileInputStream( "readandshow.txt" );
+	FileChannel fc = fin.getChannel(); 
+
+接下来创建一个字节缓冲区对象，并指定缓冲区大小：
+	
+	ByteBuffer buffer = ByteBuffer.allocate( 1024 );
+
+最后，将数据从通道中读入缓冲区，如下所示：
+	
+	fc.read( buffer );
+
+值得注意的是，我们并不需要告诉缓冲区要读多少数据，因为每个缓冲区内部有复杂的统计机制，会跟踪已经读入了多少数据，还有多少空间可以读取数据，后面将会介绍缓冲区内部实现的细节。
+
+下面是读取操作的具体示例代码：
+
+	import java.io.FileInputStream;
+	import java.io.IOException;
+	import java.nio.ByteBuffer;
+	import java.nio.channels.FileChannel;
+	
+	public class ReadAndShow {
+	    public static void main(String[] args) throws IOException {
+	        FileInputStream fis = new FileInputStream("src/main/resources/readAndshow.txt");
+	        FileChannel fileChannel = fis.getChannel();
+	        
+	        ByteBuffer buffer = ByteBuffer.allocate( 1024 );
+	        
+	        fileChannel.read(buffer);
+	
+	        buffer.flip();
+	        while(buffer.hasRemaining()){
+	            byte b = buffer.get();
+	            System.out.print((char)b);
+	        }
+	        
+	        fis.close();
+	    }
+	}
+
+### 写入文件 ###
+在NIO中向文件写入数据与读取数据步骤类似，首先从FileOutputStream中获取Channel:
+
+	FileOutputStream fout = new FileOutputStream( "writesomebytes.txt" );
+	FileChannel fc = fout.getChannel();
+
+然后创建缓冲区，并向缓冲区中写入数据：
+
+	ByteBuffer buffer = ByteBuffer.allocate( 1024 );
+    String somebytes = "Write some bytes into file!";
+    buffer.put(somebytes.getBytes());
+
+最后将缓冲区中的数据写入通道：
+
+	channel.write(buffer);
+
+下面是完整示例：
+	
+	import java.io.FileOutputStream;
+	import java.io.IOException;
+	import java.nio.ByteBuffer;
+	import java.nio.channels.FileChannel;
+	
+	public class WriteSomeBytes {
+	    public static void main(String[] args) throws IOException {
+	        FileOutputStream fos = new FileOutputStream( "writeSomebytes.txt" );
+	        FileChannel channel = fos.getChannel();
+	        
+	        ByteBuffer buffer = ByteBuffer.allocate( 1024 );
+	        String somebytes = "Write some bytes into file!";
+	        buffer.put(somebytes.getBytes());
+	        
+	        buffer.flip();
+	        
+	        channel.write(buffer);
+	        
+	        fos.close();
+	    }
+	}
+
+### 读写结合 ###
+接下来我们演示将读和写操作结合在一起时，需要哪些操作。其实将读写结合在一起时，也需要三个简单步骤，如下：
+
+1. 创建一个缓冲区，用于传递读写的数据
+2. 从源文件中获取通道，并将数据读入缓冲区
+3. 将缓冲区内容写入目标文件的通道
+
+通过不断重复的进行读写操作，最终完成所有数据的传递。下面的例子完成了将源文件中内容复制到目标文件的操作，程序中利用clear()，flip()方法重置缓冲区，并通过一些缓冲区的方法检查缓冲区状态，这些方法会在下面介绍
+
+### CopyFile的例子 ###
+CopyFile程序的内部循环其实非常简单，因为缓冲区对象会跟踪自己的状态，所以只需要做如下操作
+	
+	inChannel.read( buffer );
+	outChannel.write( buffer );
+
+即第一行将数据读入缓冲区，第二行将缓冲区数据写入输出通道。
+
+### 检查状态 ###
+下一步是检查拷贝何时完成。当没有更多的数据时，拷贝就算完成，并且可以在 read() 方法返回 -1 是判断这一点，如下所示：
+
+	int r = inChannel.read( buffer );
+	
+	if (r==-1) {
+	break;
+	}
+	
+### 重设缓冲区 ###
+最后，每次循环初始的时候，调用clear()方法清空缓冲区，以便读入新的数据；在将缓冲区数据写入输出通道之前，调用flip()方法，让缓冲区可以将新读入的数据写入通道(flip方法作用会在之后介绍)
+
+	buffer.clear();
+	
+	int r = inChannel.read( buffer );
+	
+	if (r==-1) {
+	break;
+	}
+	
+	buffer.flip();
+	
+	outChannel.write( buffer );
+
+## 缓冲区内部细节 ##
+### 概述 ###
+相信经过之前的代码练习，大家对于缓冲区的实现机制应该有很多疑惑，本节将介绍缓冲区的核心组件：**状态变量**和**访问方法**
+
+状态变量是之前提到的缓冲区内部统计机制的关键，在每次读取/写入缓冲区的时候，状态变量都会发生变化，缓冲区正是通过这些变量的状态来管理缓冲区内的资源。
+
+当从通道中读取数据的时候，数据被放入缓冲区，这时可以将缓冲区数据直接写入另一个通道，但是大部分情况下，我们需要访问缓冲区内部的数据，这时就用到了访问方法get()来完成这个操作，同时也可以用put()方法向缓冲区写入数据。
+
+### 状态变量 ###
+可以用三个值指定缓冲区任意时刻的状态：
+
+* position
+* limit
+* capacity
+
+这三个变量一起可以追踪缓冲区的状态以及它所包含的数据
+
+为了演示这三个变量的作用，我们假设要从一个输入通道拷贝数据到输出通道：
+### Position ###
+缓冲区实际上就是一个被美化的数组，该数组存放了所有已经读入或即将写出的数据，而position的作用就是跟踪当前缓冲区中包含多少数据，类似于数组中的下标，更确切的说，它标记了下一个即将写入的数据放到数组的哪一个元素中。因此，如果读取3个数据到缓冲区中，那么position将会设置为3，指向数组中的第4个元素。
+
+同样的，在写入通道时，position值跟踪了已经从缓冲区中获取了多少数据，即指定下一个即将写入的数据在哪个位置，因此如果从缓冲区写了5个字节到通道中，那么position值将被设置为5，指向数组中的第6个元素。
+
+### Limit ###
+当从缓冲区中读取数据时，limit变量表示还有多少数据可以取出；当写入数据到缓冲区中时，limit变量表示还可以写入多少数据
+
+position总是小于或等于limit。
+
+### Capacity ###
+缓冲区的capacity变量表示了该缓冲区可以存储的最大数据容量，实际上，该变量指定了底层数组的大小，或者至少是指定了我们可以使用的数组大小。
+
+limit绝对不能大于capacity
+
+### 观察变量 ###
+我们假设现在有个8字节大小的缓冲区，Buffer的状态如下图所示：
+
+![](http://i.imgur.com/6X5EiUF.gif)
+
+**因为limit绝对不能大于capacity，此例中两个值都被设置为8，我们通过将它们指向数组的尾部来说明这一点**
+
+![](http://i.imgur.com/Cw83Spr.gif)
+
+**position 设置为0。如果我们读一些数据到缓冲区中，那么下一个读取的数据就进入 slot 0 。如果我们从缓冲区写一些数据，从缓冲区读取的下一个字节就来自 slot 0 。 position 设置如下所示：**
+
+![](http://i.imgur.com/hfnKZmf.gif)
+
+**由于 capacity 不会改变，所以我们在下面的讨论中可以忽略它。**
+
+### 第一次读取 ###
+现在我们可以开始在新创建的缓冲区上进行读/写操作。首先从输入通道中读一些数据到缓冲区中。第一次读取得到三个字节。它们被放到数组中从 position 开始的位置，这时 position 被设置为 0。读完之后，position 就增加到 3，如下所示：
+
+![](http://i.imgur.com/3fG4tuo.gif)
+
+**limit没有改变**
+
+### 第二次读取 ###
+在第二次读取时，我们从输入通道读取另外两个字节到缓冲区中。这两个字节储存在由 position 所指定的位置上， position 因而增加 2：
+
+![](http://i.imgur.com/mlpjKtQ.gif)
+
+**limit 没有改变。**
+
+### flip ###
+现在我们要将数据写到输出通道中。在这之前，我们必须调用 **flip()** 方法。这个方法做两件非常重要的事：
+
+* 它将 limit 设置为当前 position。
+* 它将 position 设置为 0。
+
+前一小节中的图显示了在 flip 之前缓冲区的情况。下面是在 flip 之后的缓冲区：
+
+![](http://i.imgur.com/MWboT8g.gif)
+
+**我们现在可以将数据从缓冲区写入通道了。 position 被设置为 0，这意味着我们得到的下一个字节是第一个字节。 limit 已被设置为原来的 position，这意味着它包括以前读到的所有字节，并且一个字节也不多。**
+
+### 第一次写入 ###
+在第一次写入时，我们从缓冲区中取四个字节并将它们写入输出通道。这使得 position 增加到 4，而 limit 不变，如下所示：
+
+![](http://i.imgur.com/pjWI0FN.gif)
+
+### 第二次写入 ###
+我们只剩下一个字节可写了。 limit在我们调用 flip() 时被设置为 5，并且 position 不能超过 limit。所以最后一次写入操作从缓冲区取出一个字节并将它写入输出通道。这使得 position 增加到 5，并保持 limit 不变，如下所示：
+
+![](http://i.imgur.com/H5F0t5N.gif)
+
+### clear ###
+最后一步是调用缓冲区的 clear() 方法。这个方法重设缓冲区以便接收更多的字节。 Clear 做两种非常重要的事情：
+
+* 它将 limit 设置为与 capacity 相同。
+* 它设置 position 为 0。
+
+下图显示了在调用 clear() 后缓冲区的状态：
+
+![](http://i.imgur.com/gcND7Zz.gif)
+
+**缓冲区现在可以接收新的数据了。**
+
+### 访问方法 ###
+到目前为止，我们都是将数据从一个通道读入缓冲区，然后再写入另一个通道，实际上，很多时候我们需要在程序内部获取并处理数据，那么这时候就需要有方法可以访问缓冲区内部的数据，即访问方法。
+
+下面我们来分析一下ByteBuffer类的get()和put()方法。
+
+### get()方法 ###
+ByteBuffer 类中有四个 get() 方法：
+
+	1. byte get();
+	2. ByteBuffer get( byte dst[] );
+	3. ByteBuffer get( byte dst[], int offset, int length );
+	4. byte get( int index );
+
+第一个方法获取单个字节。第二和第三个方法将一组字节读到一个数组中。第四个方法从缓冲区中的特定位置获取字节。那些返回 ByteBuffer 的方法只是返回调用它们的缓冲区的 this 值。
+
+此外，我们认为前三个 get() 方法是相对的，而最后一个方法是绝对的。 相对 意味着 get() 操作服从 limit 和 position 值 ― 更明确地说，字节是从当前 position 读取的，而 position 在 get 之后会增加。另一方面，一个 绝对 方法会忽略 limit 和 position 值，也不会影响它们。
+
+上面列出的方法对应于 ByteBuffer 类。其他类有等价的 get() 方法，这些方法除了不是处理字节外，其它方面是是完全一样的，它们处理的是与该缓冲区类相适应的类型。
+
+### put()方法 ###
+ByteBuffer 类中有五个 put() 方法：
+
+	1. ByteBuffer put( byte b );
+	2. ByteBuffer put( byte src[] );
+	3. ByteBuffer put( byte src[], int offset, int length );
+	4. ByteBuffer put( ByteBuffer src );
+	5. ByteBuffer put( int index, byte b );
+
+第一个方法 写入（put） 单个字节。第二和第三个方法写入来自一个数组的一组字节。第四个方法将数据从一个给定的源 ByteBuffer 写入这个 ByteBuffer。第五个方法将字节写入缓冲区中特定的 位置 。那些返回 ByteBuffer 的方法只是返回调用它们的缓冲区的 this 值。
+
+与 get() 方法一样，我们将把 put() 方法划分为 相对 或者 绝对 的。前四个方法是相对的，而第五个方法是绝对的。
+
+上面显示的方法对应于 ByteBuffer 类。其他类有等价的 put() 方法，这些方法除了不是处理字节之外，其它方面是完全一样的。它们处理的是与该缓冲区类相适应的类型。
+
+### 类型化的 get() 和 put() 方法 ###
+除了前些小节中描述的 get() 和 put() 方法， ByteBuffer 还有用于读写不同类型的值的其他方法，如下所示：
+
+* getByte()
+* getChar()
+* getShort()
+* getInt()
+* getLong()
+* getFloat()
+* getDouble()
+* putByte()
+* putChar()
+* putShort()
+* putInt()
+* putLong()
+* putFloat()
+* putDouble()
+
+事实上，这其中的每个方法都有两种类型 —— 一种是相对的，另一种是绝对的。它们对于读取格式化的二进制数据（如图像文件的头部）很有用。
+
+### 缓冲区的使用：一个内部循环 ###
+下面的内部循环概括了使用缓冲区将数据从输入通道拷贝到输出通道的过程。
+
+	while (true) {
+      buffer.clear();
+
+      int r = inChannel.read( buffer );
+
+      if (r==-1) {
+        break;
+      }
+
+      buffer.flip();
+
+      outChannel.write( buffer );
+    }
+
+read() 和 write() 调用得到了极大的简化，因为许多工作细节都由缓冲区完成了。 clear() 和 flip() 方法用于让缓冲区在读和写之间切换。
